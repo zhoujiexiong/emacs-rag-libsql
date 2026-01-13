@@ -70,8 +70,12 @@ async def home():
             <p><strong>Embedding Model:</strong> {settings.embedding_model}</p>
             <p><strong>Reranking Model:</strong> {settings.rerank_model}</p>
             <p><strong>Reranking Enabled:</strong> {settings.rerank_enabled}</p>
+            <p><strong>Chunk Strategy:</strong> {settings.chunk_strategy}</p>
             <p><strong>Chunk Size:</strong> {settings.chunk_size} chars</p>
             <p><strong>Chunk Overlap:</strong> {settings.chunk_overlap} chars</p>
+            <p><strong>Min Chunk Size:</strong> {settings.min_chunk_size} chars</p>
+            <p><strong>Org Include Heading:</strong> {settings.org_chunk_include_heading}</p>
+            <p><strong>Org Oversize Strategy:</strong> {settings.org_chunk_oversize_strategy}</p>
         </div>
 
         <h2>Available Endpoints</h2>

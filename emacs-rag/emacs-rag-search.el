@@ -48,6 +48,19 @@
     (buffer-string)))
 
 (defun emacs-rag--format-result (result index)
+  "Format RESULT for display at INDEX."
+  (let* ((path (alist-get 'source_path result))
+         (basename (file-name-nondirectory path))
+         (chunk (alist-get 'chunk_index result))
+         (score (alist-get 'score result))
+         (content (alist-get 'content result))
+         (header (format "%2d. %-20s chunk %-3d score %.3f"
+                        index basename chunk score))
+         ;; 关键修改：将 content 中的所有换行符替换为空格，不要在 minibuffer 里做 wrap
+         (clean-content (replace-regexp-in-string "\n+" " " content)))
+    (concat header " | " clean-content)))
+
+(defun orig/emacs-rag--format-result (result index)
   "Format RESULT for display at INDEX.
 Returns a multiline string with header and wrapped content."
   (let* ((path (alist-get 'source_path result))
@@ -60,6 +73,9 @@ Returns a multiline string with header and wrapped content."
          (wrapped-content (emacs-rag--wrap-text
                           content
                           (- emacs-rag-result-display-width 4))))
+    ;; (concat header "\n    "
+    ;;         (replace-regexp-in-string "\n" "\n    "
+    ;;                                   (replace-regexp-in-string "\n\\{2,\\}" "\n" wrapped-content)))))
     (concat header "\n    "
             (replace-regexp-in-string "\n" "\n    " wrapped-content))))
 
@@ -439,6 +455,332 @@ LIMIT is the maximum number of results."
                        (read-number "Number of results: "
                                    emacs-rag-search-limit))))
   (emacs-rag-search-vector query limit))
+
+;;; emacs-rag: 单行 minibuffer display（把所有换行替为空格） + 原始多行 preview（最小改动）
+
+(require 'cl-lib)
+(require 'ivy)
+
+(defun emacs-rag--show-preview-from-full (full)
+  "在 *emacs-rag-preview* 中显示 FULL（原始多行格式），并设置为只读预览。"
+  (let ((buf (get-buffer-create "*emacs-rag-preview*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (or full ""))
+        (goto-char (point-min))
+        (special-mode)))
+    ;; 显示但不打断 minibuffer
+    (display-buffer buf '(display-buffer-pop-up-window . ((inhibit-same-window . t))))))
+
+(defun emacs-rag--display-results (results mode query)
+  "Display RESULTS from MODE search for QUERY.
+
+在 minibuffer 中为每个候选显示单行（把原始 formatted 的所有换行与多余空格替为单个空格），
+以便补全过程中能看到整行信息（不会被多行撑满）。
+同时保留原始 formatted 字符串用于 preview（*emacs-rag-preview*），按原始格式显示。"
+  (let* ((pairs
+          ;; pairs 是 (single-display . (result full-formatted)) 的 alist
+          (cl-loop for result in results
+                   for index from 1
+                   collect
+                   (let* ((full (orig/emacs-rag--format-result result index)) ; 原始 multi-line 字符串
+                          ;; single: 把所有换行和连续空白替为单个空格，得到单行 display
+                          (single (replace-regexp-in-string "[ \t\n]+" " " (string-trim (or full "")))))
+                     (cons single (list result full))))))
+    (if (null pairs)
+        (message "No %s results for %s" mode query)
+      (let* ((display-strings (mapcar #'car pairs))
+             (count (length display-strings))
+             ;; 因为每项为单行字符串，所以可以按项数控制 ivy-height（或换为你原有的 height 逻辑）
+             (computed-height (min count (or emacs-rag-search-limit ivy-height))))
+        ;;(let ((ivy-height (max 1 computed-height)))
+        (let ((ivy-height ivy-height))
+          (ivy-read (format "%s search for %s: " mode query)
+                    display-strings
+                    :action (lambda (choice)
+                              ;; 找回对应的 result 并 open（cdr 是 (result full)）
+                              (let* ((entry (assoc choice pairs))
+                                     (payload (and entry (cdr entry)))
+                                     (result (and payload (nth 0 payload))))
+                                (if result
+                                    (emacs-rag--open-result result)
+                                  (message "emacs-rag: cannot find result for choice: %s" choice))))
+                    :update-fn (lambda (&optional _str)
+                                 ;; update-fn 可能被以 0 或 1 个参数调用，签名用 &optional
+                                 (when (and (boundp 'ivy-last) ivy-last)
+                                   (let ((cur (ivy-state-current ivy-last)))
+                                     (when cur
+                                       (let* ((entry (assoc cur pairs))
+                                              (payload (and entry (cdr entry)))
+                                              (full (and payload (nth 1 payload))))
+                                         (when full
+                                           (emacs-rag--show-preview-from-full full)))))))
+                    :caller 'emacs-rag-search))))))
+
+;; ;;; emacs-rag: 单行 minibuffer display（把所有换行替为空格） + 原始多行 preview（最小改动）
+
+;; (require 'cl-lib)
+;; (require 'ivy)
+
+;; (defun emacs-rag--show-preview-from-full (full)
+;;   "在 *emacs-rag-preview* 中显示 FULL（原始多行格式），并设置为只读预览。"
+;;   (let ((buf (get-buffer-create "*emacs-rag-preview*")))
+;;     (with-current-buffer buf
+;;       (let ((inhibit-read-only t))
+;;         (erase-buffer)
+;;         (insert (or full ""))
+;;         (goto-char (point-min))
+;;         (special-mode)))
+;;     ;; 显示但不打断 minibuffer
+;;     (display-buffer buf '(display-buffer-pop-up-window . ((inhibit-same-window . t))))))
+
+
+;; (defun emacs-rag--display-results (results mode query)
+;;   "Display RESULTS from MODE search for QUERY.
+
+;; 在 minibuffer 中为每个候选显示单行（把原始 formatted 的所有换行与多余空格替为单个空格），
+;; 以便补全过程中能看到整行信息（不会被多行撑满）。
+;; 同时保留原始 formatted 字符串用于 preview（*emacs-rag-preview*），按原始格式显示。"
+;;   (let* ((pairs
+;;           ;; pairs 是 (single-display . (result full-formatted)) 的 alist
+;;           (cl-loop for result in results
+;;                    for index from 1
+;;                    collect
+;;                    (let* ((full (emacs-rag--format-result result index)) ; 原始 multi-line 字符串
+;;                           ;; single: 把所有换行和连续空白替为单个空格，得到单行 display
+;;                           (single (replace-regexp-in-string "[ \t\n]+" " " (string-trim (or full "")))))
+;;                      (cons single (list result full))))))
+;;     (if (null pairs)
+;;         (message "No %s results for %s" mode query)
+;;       (let* ((display-strings (mapcar #'car pairs))
+;;              (count (length display-strings))
+;;              ;; 因为每项为单行字符串，所以可以按项数控制 ivy-height（或换为你原有的 height 逻辑）
+;;              (computed-height (min count (or emacs-rag-search-limit ivy-height))))
+;;         ;;(let ((ivy-height (max 1 computed-height)))
+;;         (let ((ivy-height ivy-height))
+;;           (ivy-read (format "%s search for %s: " mode query)
+;;                     display-strings
+;;                     :action (lambda (choice)
+;;                               ;; 找回对应的 result 并 open（cdr 是 (result full)）
+;;                               (let* ((entry (assoc choice pairs))
+;;                                      (payload (and entry (cdr entry)))
+;;                                      (result (and payload (nth 0 payload))))
+;;                                 (if result
+;;                                     (emacs-rag--open-result result)
+;;                                   (message "emacs-rag: cannot find result for choice: %s" choice))))
+;;                     :update-fn (lambda (&optional _str)
+;;                                  ;; update-fn 可能被以 0 或 1 个参数调用，签名用 &optional
+;;                                  (when (and (boundp 'ivy-last) ivy-last)
+;;                                    (let ((cur (ivy-state-current ivy-last)))
+;;                                      (when cur
+;;                                        (let* ((entry (assoc cur pairs))
+;;                                               (payload (and entry (cdr entry)))
+;;                                               (full (and payload (nth 1 payload))))
+;;                                          (when full
+;;                                            (emacs-rag--show-preview-from-full full)))))))
+;;                     :caller 'emacs-rag-search))))))
+
+;;;;;;;;;;
+;; 方案二
+;;;;;;;;;;
+
+;;; emacs-rag: header-id + display-property 版本 —— 多行在 minibuffer 可视化，
+;;; 同时 ivy-occur 中保留可解析的 id 以保证 RET 跳转正确。
+
+;; (require 'cl-lib)
+;; (require 'ivy)
+
+;; (defun emacs-rag--make-id (index)
+;;   "基于 INDEX 生成短 id 字符串，例如 \"0001\"。"
+;;   (format "%04d" index))
+
+;; (defun emacs-rag--collapse-and-indent (s &optional indent)
+;;   "折叠连续空行为单一换行并给每行添加 INDENT 空格前缀（默认 4）。
+;; 返回处理后的字符串。"
+;;   (let* ((indent (or indent 4))
+;;          (prefix (make-string indent ?\s))
+;;          ;; 先折叠多个空行为一个换行
+;;          (collapsed (replace-regexp-in-string "\n\\{2,\\}" "\n" (or s "")))
+;;          ;; 对每个换行后的行加缩进（不改变首行）
+;;          (lines (split-string collapsed "\n")))
+;;     (mapconcat #'identity
+;;                (cl-loop for i from 0
+;;                         for ln in lines
+;;                         collect (if (= i 0) ln (concat prefix ln)))
+;;                "\n")))
+
+;; (defun new/emacs-rag--display-results (results mode query)
+;;   "Display RESULTS from MODE search for QUERY while showing full multi-line content in minibuffer.
+
+;; 策略：
+;; - 每个候选的真实键为单行字符串 \"[id] header\"（作为匹配键与写入 *ivy-occur* 的可解析文本）。
+;; - 同时将该字符串 propertize 为带有 'display property 的对象，display 值为包含 header + '\\n' + full-multiline-content 的字符串，
+;;   从而在 minibuffer 中视觉上呈现为多行。
+;; - action / update-fn 通过解析 id（优先使用 text-property，在 *ivy-occur* 场景回退到正则从文本解析）来找到原始 result 并 open/preview。
+;; "
+;;   (let* ((id->result (make-hash-table :test 'equal))
+;;          (candidates
+;;           ;; 构造 (propertized-display . result) 列表
+;;           (cl-loop for result in results
+;;                    for index from 1
+;;                    collect
+;;                    (let* ((id (emacs-rag--make-id index))
+;;                           ;; header：简短单行（用于 id+header 的键）
+;;                           (header (emacs-rag--format-result-header result index))
+;;                           ;; full：完整多行内容（由 emacs-rag--format-result 生成，或者你也可直接构造）
+;;                           (full (emacs-rag--format-result result index))
+;;                           ;; 处理 full：折叠连续空行并在每行加缩进，避免空白行撑满空间
+;;                           (full-processed (emacs-rag--collapse-and-indent
+;;                                            (if (stringp full)
+;;                                                ;; full 包含 header 行在最上面（如果 emacs-rag--format-result 已包含 header）
+;;                                                ;; 我们要显示 header once; 若 full 已包含 header，strip first header line
+;;                                                (let ((lines (split-string full "\n")))
+;;                                                  ;; 若 full 首行看起来像 header（以 "index." 开头），移除首行，避免重复
+;;                                                  (if (and lines (string-match-p "^[[:space:]]*[0-9]+\\. " (car lines)))
+;;                                                      (mapconcat #'identity (cdr lines) "\n")
+;;                                                    full))
+;;                                              "")
+;;                                            4))
+;;                           ;; display-value: 可见内容：先放 [id] header，然后换行并放 processed full 内容
+;;                           (display-value (if (and full-processed (not (string= full-processed "")))
+;;                                              (concat "[" id "] " header "\n" full-processed)
+;;                                            ;; 若没有 full 内容，仅显示 header 前缀
+;;                                            (concat "[" id "] " header)))
+;;                           ;; base-key: 实际键（单行），带 id 前缀，供 assoc / occur 用
+;;                           (base-key (concat "[" id "] " header))
+;;                           ;; propertize base-key：设置 id property 与 display property（视觉替代）
+;;                           (propertized (propertize base-key
+;;                                                    'emacs-rag-id id
+;;                                                    'display display-value)))
+;;                      (puthash id result id->result)
+;;                      (cons propertized result)))))
+;;     (if (null results)
+;;         (message "No %s results for %s" mode query)
+;;       (let* ((display-strings (mapcar #'car candidates))
+;;              (count (length display-strings))
+;;              ;; 这里按单行候选数计算高度（因每个候选有显式 id 前缀），你也可替换为更复杂的 height 计算
+;;              (computed-height (min count (or emacs-rag-search-limit ivy-height))))
+;;         ;; by zjx
+;;         ;;(let ((ivy-height (max 1 computed-height)))
+;;         (let ((ivy-height ivy-height))
+;;           (ivy-read (format "%s search for %s: " mode query)
+;;                     display-strings
+;;                     :action (lambda (choice)
+;;                               ;; 在 action 中解析 id：优先用 text-prop（minibuffer 内可用），回退用正则解析（来自 *ivy-occur* 的纯文本）
+;;                               (let* ((id (or (get-text-property 0 'emacs-rag-id choice)
+;;                                              (when (string-match "^\\[\\([0-9]+\\)\\]" choice)
+;;                                                (match-string 1 choice))))
+;;                                      (res (and id (gethash id id->result))))
+;;                                 (if res
+;;                                     (emacs-rag--open-result res)
+;;                                   (message "emacs-rag: cannot find result for id %s" id))))
+;;                     ;; update-fn 兼容 Ivy 不同调用路径，接受可选参数
+;;                     :update-fn (lambda (&optional _str)
+;;                                  (when (and (boundp 'ivy-last) ivy-last)
+;;                                    (let ((cur (ivy-state-current ivy-last)))
+;;                                      (when cur
+;;                                        (let* ((id (or (get-text-property 0 'emacs-rag-id cur)
+;;                                                       (when (string-match "^\\[\\([0-9]+\\)\\]" cur)
+;;                                                         (match-string 1 cur))))
+;;                                               (res (and id (gethash id id->result))))
+;;                                          (when res (emacs-rag--show-preview res)))))))
+;;                     :caller 'emacs-rag-search))))))
+
+;;;;;;;;;;
+;; 方案一
+;;;;;;;;;;
+
+;; ;;; Header-id + preview friendly emacs-rag--display-results
+;; ;;; 替换后完整实现（含用到的 helper），确保 ivy-occur / RET 跳转与 preview 正常工作。
+
+;; (require 'cl-lib)
+;; (require 'ivy)
+
+;; (defun emacs-rag--make-id (index)
+;;   "基于 INDEX 生成短 id 字符串，例如 \"0001\"。"
+;;   (format "%04d" index))
+
+;; (defun emacs-rag--format-result-header (result index)
+;;   "为 RESULT 生成单行 header（不含 id），用于构建 display 字符串的一部分。"
+;;   (let* ((path (alist-get 'source_path result))
+;;          (basename (file-name-nondirectory (or path "")))
+;;          (chunk (or (alist-get 'chunk_index result) 0))
+;;          (score (or (alist-get 'score result) 0.0)))
+;;     (format "%2d. %-30s chunk %-3d score %.3f" index basename chunk score)))
+
+;; (defun emacs-rag--show-preview (result)
+;;   "在 *emacs-rag-preview* buffer 中显示 RESULT 的完整多行内容（wrapped，不截断）。"
+;;   (let* ((buf (get-buffer-create "*emacs-rag-preview*"))
+;;          (path (alist-get 'source_path result))
+;;          (line (alist-get 'line_number result))
+;;          (content (alist-get 'content result)))
+;;     (with-current-buffer buf
+;;       (let ((inhibit-read-only t))
+;;         (erase-buffer)
+;;         (insert (format "Source: %s\nLine: %s\n\n" (or path "") (or line "")))
+;;         (if (fboundp 'emacs-rag--wrap-text)
+;;             (insert (emacs-rag--wrap-text (or content "") emacs-rag-result-display-width))
+;;           (insert (or content "")))
+;;         (goto-char (point-min))
+;;         (special-mode)))
+;;     ;; 显示到新窗口，但不打断 minibuffer（display-buffer-pop-up-window）
+;;     (display-buffer buf '(display-buffer-pop-up-window . ((inhibit-same-window . t))))))
+
+;; (defun emacs-rag--display-results (results mode query)
+;;   "Display RESULTS from MODE search for QUERY using header-id + properties.
+
+;; 实现要点：
+;; - 每个候选的显示字符串以可见 id 前缀开头（例如 \"[0001] ...\"），
+;;   这保证 *ivy-occur* 中每一行都能作为匹配键。
+;; - 同时在显示字符串上设置 'emacs-rag-id text-property（在 minibuffer 中可直接读���），
+;;   如果 property 不可用（例如从 *ivy-occur* 回来的纯文本），会用正则从文本解析 id。
+;; - 使用 id->result 哈希表在 action/update-fn 中查找原始 result，并用于打开/预览。
+;; - 该实现保留原始 result 的完整多行内容用于 preview / open，不改变原始数据。"
+;;   (let* ((id->result (make-hash-table :test 'equal))
+;;          (candidates
+;;           ;; 构造 (display-string . result) 列表；display-string 包含 id 前缀并被 propertize
+;;           (cl-loop for result in results
+;;                    for index from 1
+;;                    collect
+;;                    (let* ((id (emacs-rag--make-id index))
+;;                           (header (emacs-rag--format-result-header result index))
+;;                           ;; display 包含可见 id 前缀，且加上 text property 方便在 minibuffer 中读取
+;;                           (display (propertize (format "[%s] %s" id header)
+;;                                                'emacs-rag-id id)))
+;;                      (puthash id result id->result)
+;;                      (cons display result)))))
+;;     (if (null results)
+;;         (message "No %s results for %s" mode query)
+;;       (let* ((display-strings (mapcar #'car candidates))
+;;              (count (length display-strings))
+;;              ;; 因为每个候选是单行 header，计算高度直接按项数或你现有的高度计算逻辑
+;;              ;; by zjx (computed-height (min count (or emacs-rag-search-limit ivy-height))))
+;;              (computed-height count))
+;;         (let ((ivy-height (max 1 computed-height)))
+;;           (ivy-read (format "%s search for %s: " mode query)
+;;                     display-strings
+;;                     :action (lambda (choice)
+;;                               ;; 先尝试直接读取 text property（在 minibuffer 中通常存在）
+;;                               (let* ((id (or (get-text-property 0 'emacs-rag-id choice)
+;;                                              ;; 若 property 不存在（如来自 *ivy-occur*），回退到从文本解析 id
+;;                                              (when (string-match "^\\[\\([0-9]+\\)\\]" choice)
+;;                                                (match-string 1 choice))))
+;;                                      (result (and id (gethash id id->result))))
+;;                                 (if result
+;;                                     (emacs-rag--open-result result)
+;;                                   (message "emacs-rag: cannot find result for id %s" id))))
+;;                     ;; 注意：:update-fn 可能会以 0 或 1 个参数被调用，签名应兼容
+;;                     :update-fn (lambda (&optional _str)
+;;                                  (when (and (boundp 'ivy-last) ivy-last)
+;;                                    (let ((cur (ivy-state-current ivy-last)))
+;;                                      (when cur
+;;                                        (let* ((id (or (get-text-property 0 'emacs-rag-id cur)
+;;                                                       (when (string-match "^\\[\\([0-9]+\\)\\]" cur)
+;;                                                         (match-string 1 cur))))
+;;                                               (res (and id (gethash id id->result))))
+;;                                          (when res (emacs-rag--show-preview res)))))))
+;;                     :caller 'emacs-rag-search))))))
 
 (provide 'emacs-rag-search)
 ;;; emacs-rag-search.el ends here

@@ -59,7 +59,8 @@ def index_file(
     chunks = chunk_text(
         content,
         chunk_size=settings.chunk_size,
-        overlap=settings.chunk_overlap
+        overlap=settings.chunk_overlap,
+        file_path=resolved_path
     )
 
     if not chunks:

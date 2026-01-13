@@ -12,7 +12,7 @@ app = typer.Typer(help="Emacs RAG Server CLI")
 def serve(
     host: str = typer.Option(None, help="Host to bind to (overrides EMACS_RAG_HOST)"),
     port: int = typer.Option(None, help="Port to bind to (overrides EMACS_RAG_PORT)"),
-    reload: bool = typer.Option(False, help="Enable auto-reload for development")
+    reload: bool = typer.Option(False, help="Enable auto-reload for development"),
 ):
     """
     Start the FastAPI server.
@@ -38,7 +38,7 @@ def serve(
         host=bind_host,
         port=bind_port,
         reload=reload,
-        log_level="info"
+        log_level="info",
     )
 
 
@@ -56,8 +56,12 @@ def config():
     typer.echo()
 
     typer.echo("[Chunking]")
+    typer.echo(f"  Strategy: {settings.chunk_strategy}")
     typer.echo(f"  Chunk Size: {settings.chunk_size} chars")
     typer.echo(f"  Chunk Overlap: {settings.chunk_overlap} chars")
+    typer.echo(f"  Min Chunk Size: {settings.min_chunk_size} chars")
+    typer.echo(f"  Org Include Heading: {settings.org_chunk_include_heading}")
+    typer.echo(f"  Org Oversize Strategy: {settings.org_chunk_oversize_strategy}")
     typer.echo()
 
     typer.echo("[Embedding]")

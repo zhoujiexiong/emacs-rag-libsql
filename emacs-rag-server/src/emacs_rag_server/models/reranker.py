@@ -23,7 +23,8 @@ class RerankerModel:
                     settings = get_settings()
                     self._model = CrossEncoder(
                         settings.rerank_model,
-                        local_files_only=False
+                        local_files_only=False,
+                        trust_remote_code=True
                     )
         return self._model
 

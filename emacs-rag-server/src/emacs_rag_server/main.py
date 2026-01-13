@@ -30,7 +30,7 @@ def create_app() -> FastAPI:
         title="Emacs RAG Server",
         description="FastAPI server with LibSQL backend for semantic search and RAG",
         version="0.1.0",
-        lifespan=lifespan
+        lifespan=lifespan,
     )
 
     # Add CORS middleware for local development

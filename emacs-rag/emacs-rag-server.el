@@ -168,8 +168,10 @@ Returns the parsed JSON response as an alist."
   (emacs-rag-ensure-server)
   (let* ((url-request-method method)
          (url-request-extra-headers
-          (when payload
-            '(("Content-Type" . "application/json"))))
+          (append
+           '(("Accept" . "application/json; charset=utf-8"))
+           (when payload
+             '(("Content-Type" . "application/json; charset=utf-8")))))
          (url-request-data
           (when payload
             (encode-coding-string (json-encode payload) 'utf-8)))
@@ -186,6 +188,7 @@ Returns the parsed JSON response as an alist."
             ""))
          (url (concat (emacs-rag--server-url) endpoint query-string)))
     (with-current-buffer (url-retrieve-synchronously url nil nil emacs-rag-http-timeout)
+      (set-buffer-multibyte t)
       (goto-char (point-min))
       ;; Check for HTTP errors
       (when (re-search-forward "^HTTP/[0-9.]+ \\([0-9]+\\)" nil t)
@@ -207,7 +210,13 @@ Returns the parsed JSON response as an alist."
               (skip-chars-forward " \t\n\r")
               (if (eobp)
                   (error "Empty response from server")
-                (json-read)))
+                (let ((response-string (buffer-substring-no-properties (point) (point-max))))
+                  (with-temp-buffer
+                    (insert response-string)
+                    (set-buffer-multibyte t)
+                    (decode-coding-region (point-min) (point-max) 'utf-8)
+                    (goto-char (point-min))
+                    (json-read)))))
           (error
            (goto-char (point-min))
            (message "Error parsing JSON response: %s" err)

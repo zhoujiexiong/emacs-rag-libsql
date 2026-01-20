@@ -98,6 +98,23 @@ def init_schema() -> None:
         "CREATE INDEX IF NOT EXISTS idx_org_headings_path ON org_headings(source_path)"
     )
 
+    # Create file_metadata table to track file content changes
+    client.execute("""
+        CREATE TABLE IF NOT EXISTS file_metadata (
+            source_path TEXT PRIMARY KEY,
+            content_hash TEXT NOT NULL,
+            updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+            created_at INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+    """)
+    
+    # Update existing tables if they have the old 'last_modified' column
+    try:
+        client.execute("ALTER TABLE file_metadata RENAME COLUMN last_modified TO updated_at")
+    except Exception:
+        # Ignore if column already exists or rename fails
+        pass
+
     # Create org heading embeddings table for semantic search
     client.execute("""
         CREATE TABLE IF NOT EXISTS org_heading_embeddings (
@@ -196,6 +213,57 @@ def delete_documents_for_path(path: str) -> None:
     client.execute("DELETE FROM documents WHERE source_path = ?", [path])
     client.execute("DELETE FROM documents_fts WHERE source_path = ?", [path])
     client.execute("DELETE FROM org_headings WHERE source_path = ?", [path])
+    client.execute("DELETE FROM file_metadata WHERE source_path = ?", [path])
+
+
+def get_file_metadata(path: str) -> Dict[str, Any] | None:
+    """
+    Get metadata for a file.
+
+    Args:
+        path: Absolute file path
+
+    Returns:
+        Dict with file metadata or None if not found
+    """
+    client = get_client()
+    result = client.execute(
+        "SELECT content_hash, updated_at, created_at FROM file_metadata WHERE source_path = ?",
+        [path]
+    )
+    if result.rows:
+        row = result.rows[0]
+        return {
+            'content_hash': row[0],
+            'updated_at': row[1],
+            'created_at': row[2]
+        }
+    return None
+
+
+def update_file_metadata(path: str, content_hash: str) -> None:
+    """
+    Update or insert file metadata.
+
+    Args:
+        path: Absolute file path
+        content_hash: SHA-256 hash of file content
+    """
+    client = get_client()
+    
+    # First try to update existing record
+    result = client.execute("""
+        UPDATE file_metadata
+        SET content_hash = ?, updated_at = strftime('%s', 'now')
+        WHERE source_path = ?
+    """, [content_hash, path])
+    
+    # If no rows were updated (record doesn't exist), insert new record
+    if result.rows_affected == 0:
+        client.execute("""
+            INSERT INTO file_metadata (source_path, content_hash, updated_at, created_at)
+            VALUES (?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
+        """, [path, content_hash])
 
 
 def query_by_vector(query_embedding: List[float], *, n_results: int = 5) -> Dict[str, Any]:

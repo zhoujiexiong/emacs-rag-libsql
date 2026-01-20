@@ -1,12 +1,18 @@
 """File indexing service."""
 
+import hashlib
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-from ..models.database import add_documents, add_org_headings, delete_documents_for_path
+from ..models.database import add_documents, add_org_headings, delete_documents_for_path, get_file_metadata, update_file_metadata, get_client
 from ..models.embeddings import get_embedding_model
 from ..utils.chunking import batched, chunk_text
 from ..utils.config import get_settings
+
+
+def calculate_content_hash(content: str) -> str:
+    """Calculate SHA-256 hash of content."""
+    return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
 
 def index_file(
@@ -21,12 +27,11 @@ def index_file(
     Steps:
     1. Normalize path (expand user, resolve)
     2. Get content (from parameter or read file)
-    3. Chunk text with line numbers
-    4. Delete existing chunks for path
-    5. Generate embeddings in batches (batch_size=8)
-    6. Prepare chunk metadata
-    7. Store in database
-    8. Return path and chunk count
+    3. Calculate content hash
+    4. Check if file content has changed
+    5. If changed: Chunk text, generate embeddings, store in database
+    6. If not changed: Return existing chunk count without reindexing
+    7. Return path and chunk count
 
     Args:
         path: Absolute or relative file path
@@ -55,6 +60,23 @@ def index_file(
             raise ValueError(f"Not a file: {resolved_path}")
         content = file_path.read_text(encoding='utf-8')
 
+    # Calculate content hash
+    content_hash = calculate_content_hash(content)
+
+    # Check if file already exists with same content
+    existing_metadata = get_file_metadata(resolved_path)
+    
+    # Check if content has changed
+    if existing_metadata and existing_metadata['content_hash'] == content_hash:
+        # Content hasn't changed, get existing chunk count from database
+        client = get_client()
+        result = client.execute(
+            "SELECT COUNT(*) FROM documents WHERE source_path = ?",
+            [resolved_path]
+        )
+        existing_chunk_count = result.rows[0][0]
+        return (resolved_path, existing_chunk_count)
+
     # Chunk text
     chunks = chunk_text(
         content,
@@ -66,6 +88,8 @@ def index_file(
     if not chunks:
         # Empty file, delete any existing chunks
         delete_documents_for_path(resolved_path)
+        # Update metadata for empty file
+        update_file_metadata(resolved_path, content_hash)
         return (resolved_path, 0)
 
     # Delete existing chunks for this file
@@ -126,6 +150,9 @@ def index_file(
 
     # Extract and store org headings if this is an org file
     add_org_headings(resolved_path, content)
+
+    # Update file metadata
+    update_file_metadata(resolved_path, content_hash)
 
     return (resolved_path, total_chunks)
 

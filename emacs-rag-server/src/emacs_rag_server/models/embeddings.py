@@ -2,7 +2,7 @@
 
 from threading import Lock
 from typing import List
-
+import torch
 from sentence_transformers import SentenceTransformer
 
 from ..utils.config import get_settings
@@ -21,10 +21,11 @@ class EmbeddingModel:
             with self._lock:
                 if self._model is None:
                     settings = get_settings()
+                    device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
                     self._model = SentenceTransformer(
                         settings.embedding_model,
                         local_files_only=False
-                    )
+                    ).to(device)
         return self._model
 
     def embed_documents(self, documents: List[str]) -> List[List[float]]:

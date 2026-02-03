@@ -42,3 +42,8 @@ packages = ["src/emacs_rag_server"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "python-lsp-server[all]>=1.14.0",
+]

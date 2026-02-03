@@ -34,6 +34,7 @@ class RAGSettings:
     # Reranking
     rerank_model: str = os.getenv(
         "EMACS_RAG_RERANK_MODEL", "Alibaba-NLP/gte-multilingual-reranker-base"
+        #"EMACS_RAG_RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
     )
     rerank_enabled: bool = os.getenv("EMACS_RAG_RERANK_ENABLED", "true").lower() in (
         "true",

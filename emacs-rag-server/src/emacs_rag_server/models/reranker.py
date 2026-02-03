@@ -2,6 +2,7 @@
 
 from threading import Lock
 from typing import List
+import torch
 
 from sentence_transformers import CrossEncoder
 
@@ -19,13 +20,14 @@ class RerankerModel:
         """Load model with thread-safe lazy initialization."""
         if self._model is None:
             with self._lock:
+                device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
                 if self._model is None:
                     settings = get_settings()
                     self._model = CrossEncoder(
                         settings.rerank_model,
                         local_files_only=False,
                         trust_remote_code=True
-                    )
+                    ).to(device)
         return self._model
 
     def rerank(self, query: str, documents: List[str]) -> List[float]:
